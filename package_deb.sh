@@ -4,7 +4,7 @@
 APP_NAME="autoencode"
 VERSION="1.0.0"
 ARCH="amd64"
-MAINTAINER="Your Name <you@example.com>"
+MAINTAINER="SirenityK <eldarielmario@gmail.com>"
 DESCRIPTION="Intelligent video encoder for WhatsApp and Discord"
 
 # Directory setup
