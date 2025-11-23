@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -370,7 +371,7 @@ func getVideoDimensions(input string) (Dimensions, error) {
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height",
-		"-of", "csv=s=x:p=0",
+		"-of", "json",
 		input,
 	).Output()
 
@@ -378,21 +379,25 @@ func getVideoDimensions(input string) (Dimensions, error) {
 		return Dimensions{}, err
 	}
 
-	parts := strings.Split(strings.TrimSpace(string(out)), "x")
-	if len(parts) != 2 {
-		return Dimensions{}, fmt.Errorf("unexpected ffprobe output: %s", string(out))
+	var probeData struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
 	}
 
-	w, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return Dimensions{}, err
-	}
-	h, err := strconv.Atoi(parts[1])
-	if err != nil {
+	if err := json.Unmarshal(out, &probeData); err != nil {
 		return Dimensions{}, err
 	}
 
-	return Dimensions{Width: w, Height: h}, nil
+	if len(probeData.Streams) == 0 {
+		return Dimensions{}, fmt.Errorf("no video streams found")
+	}
+
+	return Dimensions{
+		Width:  probeData.Streams[0].Width,
+		Height: probeData.Streams[0].Height,
+	}, nil
 }
 
 func runCommand(name string, args ...string) error {
