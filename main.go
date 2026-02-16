@@ -308,8 +308,8 @@ func encodeDiscord(input, output, vf string) error {
 	return runCommand("ffmpeg",
 		"-i", tempIvf,
 		"-i", input,
-		"-map", "0:v",
-		"-map", "1:a",
+		"-map", "0:v:0",
+		"-map", "1:a:0",
 		"-c:v", "copy",
 		"-c:a", "libopus",
 		"-b:a", aBitrate,
@@ -323,7 +323,7 @@ func buildSvtCmd(input, vf, bitrate, preset, stats, output string, pass int) str
 	stdFlags := strings.Join(getStandardFlags(), " ")
 
 	// We inject stdFlags into the ffmpeg part to ensure the pipe receives correct yuv420p/bt709 data
-	base := fmt.Sprintf("ffmpeg -i \"%s\" -map 0:v -vf \"%s\" %s -f yuv4mpegpipe - | SvtAv1EncApp -i - --preset %s --rc 1 --tbr %s --stats \"%s\" --pass %d",
+	base := fmt.Sprintf("ffmpeg -i \"%s\" -map 0:v:0 -vf \"%s\" %s -f yuv4mpegpipe - | SvtAv1EncApp -i - --preset %s --rc 1 --tbr %s --stats \"%s\" --pass %d",
 		input, vf, stdFlags, preset, bitrate, stats, pass)
 
 	if pass == 2 {
