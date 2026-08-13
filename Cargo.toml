@@ -1,0 +1,12 @@
+[package]
+name = "autoencode"
+version = "1.0.0"
+edition = "2021"
+description = "Intelligent video encoder for WhatsApp and Discord"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+
+[profile.release]
+strip = true
