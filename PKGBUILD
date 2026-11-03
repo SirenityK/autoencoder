@@ -6,7 +6,7 @@ pkgdesc="Intelligent video encoder for WhatsApp and Discord"
 arch=('x86_64' 'aarch64')
 url="https://git.dariel.lat/sirenityk/autoencoder"
 license=('MIT')
-depends=('ffmpeg')
+depends=('ffmpeg' 'svt-av1')
 makedepends=('cargo')
 # Empty source because we use local files
 source=()

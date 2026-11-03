@@ -75,12 +75,64 @@ pub fn probe_dims(input: &str) -> Result<Dimensions> {
     })
 }
 
-pub fn has_lib_fdk() -> bool {
-    Command::new("ffmpeg")
-        .arg("-encoders")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("libfdk_aac"))
-        .unwrap_or(false)
+fn tool_output(tool: &str, arg: &str) -> Result<String> {
+    let out = Command::new(tool).arg(arg).output().map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            format!("{} not found in PATH", tool)
+        } else {
+            format!("failed to run {}: {}", tool, e)
+        }
+    })?;
+    if !out.status.success() {
+        return Err(format!("{} {} exited with {}", tool, arg, out.status).into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `ffmpeg -encoders` / `-filters` rows are "<flags> <name> <description>".
+fn lists(listing: &str, name: &str) -> bool {
+    listing
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(name))
+}
+
+fn require(listing: &str, kind: &str, names: &[&str]) -> Result<()> {
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| !lists(listing, n))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "ffmpeg is missing required {}: {}",
+        kind,
+        missing.join(", ")
+    )
+    .into())
+}
+
+/// Fails early if a tool, encoder or filter the preset needs is unavailable.
+/// Returns whether libfdk_aac is available.
+pub fn preflight(preset: &str) -> Result<bool> {
+    tool_output("ffprobe", "-version")?;
+    let encoders = tool_output("ffmpeg", "-encoders")?;
+    require(
+        &tool_output("ffmpeg", "-filters")?,
+        "filters",
+        &["fps", "scale"],
+    )?;
+
+    let has_fdk = lists(&encoders, "libfdk_aac");
+    if preset == "discord" {
+        tool_output("SvtAv1EncApp", "--version")?;
+        require(&encoders, "encoders", &["libopus"])?;
+    } else {
+        let aac = if has_fdk { "libfdk_aac" } else { "aac" };
+        require(&encoders, "encoders", &["libx264", aac])?;
+    }
+    Ok(has_fdk)
 }
 
 pub fn run(cmd: &mut Command) -> Result<()> {
@@ -102,14 +154,16 @@ pub fn run_pipe_pass(
     vf: &str,
     vbitrate: &str,
     enc_preset: &str,
+    pix_fmt: &str,
     stats: &Path,
     output: Option<&Path>,
 ) -> Result<()> {
     let mut ffmpeg = Command::new("ffmpeg");
     ffmpeg
         .args(["-i", input, "-map", "0:v", "-vf", vf])
-        .args(std_flags())
-        .args(["-f", "yuv4mpegpipe", "-"])
+        .args(std_flags(pix_fmt))
+        // -strict -1: ffmpeg refuses 10-bit yuv4mpeg without it.
+        .args(["-strict", "-1", "-f", "yuv4mpegpipe", "-"])
         .stdout(Stdio::piped());
     let mut ffmpeg = ffmpeg
         .spawn()
@@ -152,4 +206,27 @@ pub fn run_pipe_pass(
         return Err(format!("ffmpeg exited with {}", ffmpeg_status).into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ENCODERS: &str = " V....D libx264   H.264\n A....D aac   AAC libopus mention\n";
+
+    #[test]
+    fn lists_matches_name_column_only() {
+        assert!(lists(ENCODERS, "libx264"));
+        assert!(!lists(ENCODERS, "libopus"));
+    }
+
+    #[test]
+    fn require_names_what_is_missing() {
+        assert!(require(ENCODERS, "encoders", &["aac"]).is_ok());
+        let err = require(ENCODERS, "encoders", &["aac", "libopus"]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ffmpeg is missing required encoders: libopus"
+        );
+    }
 }

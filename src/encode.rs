@@ -3,11 +3,11 @@ use std::process::{Command, Stdio};
 
 use crate::ffmpeg::{run, run_pipe_pass, Dimensions, Result, TempCleanup};
 
-/// Flags applied to every video encode: bt709 color and yuv420p pixel format.
-pub(crate) fn std_flags() -> [&'static str; 10] {
+/// Flags applied to every video encode: bt709 color and the chosen pixel format.
+pub(crate) fn std_flags(pix_fmt: &str) -> [&str; 10] {
     [
         "-pix_fmt",
-        "yuv420p",
+        pix_fmt,
         "-colorspace",
         "bt709",
         "-color_trc",
@@ -19,14 +19,14 @@ pub(crate) fn std_flags() -> [&'static str; 10] {
     ]
 }
 
-/// Cap fps at 29.97 (ntsc) and scale the longer side to `resolution` (even dims).
-pub fn build_vf(dims: &Dimensions, resolution: u32) -> String {
+/// Cap fps at `fps` and scale the shorter side to `resolution` (even dims).
+pub fn build_vf(dims: &Dimensions, resolution: u32, fps: &str) -> String {
     let scale = if dims.height > dims.width {
         format!("scale={}:-2", resolution)
     } else {
         format!("scale=-2:{}", resolution)
     };
-    format!("fps=min(ntsc\\,source_fps),{}", scale)
+    format!("fps=min({}\\,source_fps),{}", fps, scale)
 }
 
 pub fn resolve_output(input: &str, output: Option<&str>, preset: &str) -> String {
@@ -49,7 +49,13 @@ fn base_name(input: &str) -> String {
 
 // --- Whatsapp preset (libx264, mp4) ---
 
-pub fn encode_whatsapp(input: &str, output: &str, vf: &str, cli: &crate::Cli, has_fdk: bool) -> Result<()> {
+pub fn encode_whatsapp(
+    input: &str,
+    output: &str,
+    vf: &str,
+    cli: &crate::Cli,
+    has_fdk: bool,
+) -> Result<()> {
     let base = whatsapp_base(input, vf);
     if cli.two_pass {
         whatsapp_two_pass(&base, input, output, cli, has_fdk)
@@ -89,7 +95,7 @@ fn whatsapp_audio_args(has_fdk: bool, abitrate: Option<&str>) -> Vec<String> {
     args
 }
 
-fn whatsapp_video_args(enc_preset: &str) -> Vec<String> {
+fn whatsapp_video_args(enc_preset: &str, pix_fmt: &str) -> Vec<String> {
     let mut args = vec![
         "-c:v".into(),
         "libx264".into(),
@@ -98,16 +104,21 @@ fn whatsapp_video_args(enc_preset: &str) -> Vec<String> {
         "-movflags".into(),
         "+faststart".into(),
     ];
-    args.extend(std_flags().map(String::from));
+    args.extend(std_flags(pix_fmt).map(String::from));
     args
 }
 
-fn whatsapp_single_pass(base: &[String], output: &str, cli: &crate::Cli, has_fdk: bool) -> Result<()> {
+fn whatsapp_single_pass(
+    base: &[String],
+    output: &str,
+    cli: &crate::Cli,
+    has_fdk: bool,
+) -> Result<()> {
     let enc_preset = cli.enc_preset.as_deref().unwrap_or("slow");
     let mut args = vec!["-y".to_string()];
     args.extend_from_slice(base);
     args.extend(whatsapp_audio_args(has_fdk, cli.abitrate.as_deref()));
-    args.extend(whatsapp_video_args(enc_preset));
+    args.extend(whatsapp_video_args(enc_preset, &cli.pix_fmt));
 
     if let Some(bitrate) = &cli.vbitrate {
         args.extend(["-b:v".into(), bitrate.clone()]);
@@ -123,9 +134,15 @@ fn whatsapp_single_pass(base: &[String], output: &str, cli: &crate::Cli, has_fdk
     run(Command::new("ffmpeg").args(&args))
 }
 
-fn whatsapp_two_pass(base: &[String], input: &str, output: &str, cli: &crate::Cli, has_fdk: bool) -> Result<()> {
+fn whatsapp_two_pass(
+    base: &[String],
+    input: &str,
+    output: &str,
+    cli: &crate::Cli,
+    has_fdk: bool,
+) -> Result<()> {
     let enc_preset = cli.enc_preset.as_deref().unwrap_or("slow");
-    let bitrate = cli.vbitrate.as_deref().unwrap_or("1000k");
+    let bitrate = cli.vbitrate.as_deref().unwrap_or("500k");
 
     let pass_log = std::env::temp_dir().join(format!(
         "ffmpeg2pass-{}-{}",
@@ -137,7 +154,7 @@ fn whatsapp_two_pass(base: &[String], input: &str, output: &str, cli: &crate::Cl
     let log0_mbtree = format!("{}-0.log.mbtree", pass_log.display());
     let _cleanup = TempCleanup(vec![PathBuf::from(&log0), PathBuf::from(&log0_mbtree)]);
 
-    // CRF is ignored in two-pass mode; bitrate is always explicit (default 1000k).
+    // Two-pass targets a bitrate, so CRF doesn't apply (clap rejects --crf with --two-pass).
     let mut video = vec![
         "-c:v".into(),
         "libx264".into(),
@@ -148,7 +165,7 @@ fn whatsapp_two_pass(base: &[String], input: &str, output: &str, cli: &crate::Cl
         "-b:v".into(),
         bitrate.into(),
     ];
-    video.extend(std_flags().map(String::from));
+    video.extend(std_flags(&cli.pix_fmt).map(String::from));
     if let Some(tune) = &cli.tune {
         video.extend(["-tune".into(), tune.clone()]);
     }
@@ -158,7 +175,12 @@ fn whatsapp_two_pass(base: &[String], input: &str, output: &str, cli: &crate::Cl
     pass1.extend_from_slice(base);
     pass1.push("-an".to_string());
     pass1.extend(video.iter().cloned());
-    pass1.extend(["-pass".into(), "1".into(), "-passlogfile".into(), pass_log.to_string_lossy().into_owned()]);
+    pass1.extend([
+        "-pass".into(),
+        "1".into(),
+        "-passlogfile".into(),
+        pass_log.to_string_lossy().into_owned(),
+    ]);
     pass1.extend(["-f".into(), "null".into(), "-".into()]);
 
     println!("Running FFmpeg (Whatsapp 2-Pass): Pass 1...");
@@ -169,7 +191,12 @@ fn whatsapp_two_pass(base: &[String], input: &str, output: &str, cli: &crate::Cl
     pass2.extend_from_slice(base);
     pass2.extend(whatsapp_audio_args(has_fdk, cli.abitrate.as_deref()));
     pass2.extend(video);
-    pass2.extend(["-pass".into(), "2".into(), "-passlogfile".into(), pass_log.to_string_lossy().into_owned()]);
+    pass2.extend([
+        "-pass".into(),
+        "2".into(),
+        "-passlogfile".into(),
+        pass_log.to_string_lossy().into_owned(),
+    ]);
     pass2.push(output.to_string());
 
     println!("Running FFmpeg (Whatsapp 2-Pass): Pass 2...");
@@ -190,10 +217,18 @@ pub fn encode_discord(input: &str, output: &str, vf: &str, cli: &crate::Cli) -> 
     let _cleanup = TempCleanup(vec![stats.clone(), ivf.clone()]);
 
     println!("Running SVT-AV1 Pass 1...");
-    run_pipe_pass(input, vf, vbitrate, enc_preset, &stats, None)?;
+    run_pipe_pass(input, vf, vbitrate, enc_preset, &cli.pix_fmt, &stats, None)?;
 
     println!("Running SVT-AV1 Pass 2...");
-    run_pipe_pass(input, vf, vbitrate, enc_preset, &stats, Some(&ivf))?;
+    run_pipe_pass(
+        input,
+        vf,
+        vbitrate,
+        enc_preset,
+        &cli.pix_fmt,
+        &stats,
+        Some(&ivf),
+    )?;
 
     println!("Muxing Audio and Video...");
     run(Command::new("ffmpeg").args([
@@ -228,28 +263,71 @@ mod tests {
 
     #[test]
     fn vf_keeps_fps_cap_with_escaped_comma() {
-        let vf = build_vf(&Dimensions { width: 640, height: 360 }, 480);
+        let vf = build_vf(
+            &Dimensions {
+                width: 640,
+                height: 360,
+            },
+            480,
+            "ntsc",
+        );
         assert_eq!(vf, "fps=min(ntsc\\,source_fps),scale=-2:480");
         assert!(vf.contains("\\,"));
     }
 
     #[test]
     fn vf_portrait_scales_height() {
-        let vf = build_vf(&Dimensions { width: 360, height: 640 }, 240);
+        let vf = build_vf(
+            &Dimensions {
+                width: 360,
+                height: 640,
+            },
+            240,
+            "ntsc",
+        );
         assert_eq!(vf, "fps=min(ntsc\\,source_fps),scale=240:-2");
     }
 
     #[test]
     fn vf_square_uses_landscape_scale() {
-        let vf = build_vf(&Dimensions { width: 640, height: 640 }, 480);
+        let vf = build_vf(
+            &Dimensions {
+                width: 640,
+                height: 640,
+            },
+            480,
+            "ntsc",
+        );
         assert_eq!(vf, "fps=min(ntsc\\,source_fps),scale=-2:480");
     }
 
     #[test]
+    fn vf_uses_requested_fps_cap() {
+        let vf = build_vf(
+            &Dimensions {
+                width: 640,
+                height: 360,
+            },
+            480,
+            "60",
+        );
+        assert_eq!(vf, "fps=min(60\\,source_fps),scale=-2:480");
+    }
+
+    #[test]
     fn output_name_defaults_to_stem_plus_preset() {
-        assert_eq!(resolve_output("video.mp4", None, "whatsapp"), "video_whatsapp.mp4");
-        assert_eq!(resolve_output("dir/a.mov", None, "discord"), "a_discord.mp4");
-        assert_eq!(resolve_output("x.mp4", Some("out.mp4"), "whatsapp"), "out.mp4");
+        assert_eq!(
+            resolve_output("video.mp4", None, "whatsapp"),
+            "video_whatsapp.mp4"
+        );
+        assert_eq!(
+            resolve_output("dir/a.mov", None, "discord"),
+            "a_discord.mp4"
+        );
+        assert_eq!(
+            resolve_output("x.mp4", Some("out.mp4"), "whatsapp"),
+            "out.mp4"
+        );
     }
 
     #[test]
@@ -284,7 +362,7 @@ mod tests {
     #[test]
     fn std_flags_are_bt709_yuv420p() {
         assert_eq!(
-            std_flags(),
+            std_flags("yuv420p"),
             [
                 "-pix_fmt",
                 "yuv420p",

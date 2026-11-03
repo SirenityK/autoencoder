@@ -1,3 +1,5 @@
 target/
 .pi/
 *.pkg.tar.zst
+src/autoencode
+pkg
