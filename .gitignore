@@ -1,41 +1,6 @@
-# Created by https://www.toptal.com/developers/gitignore/api/go,archlinuxpackages
-# Edit at https://www.toptal.com/developers/gitignore?templates=go,archlinuxpackages
+target/
+.pi/
+*.pkg.tar.zst
+src/autoencode
+pkg
 
-### ArchLinuxPackages ###
-*.tar
-*.tar.*
-*.jar
-*.exe
-*.msi
-*.zip
-*.tgz
-*.log
-*.log.*
-*.sig
-
-pkg/
-src/
-
-### Go ###
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# End of https://www.toptal.com/developers/gitignore/api/go,archlinuxpackages
